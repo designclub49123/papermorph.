@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   MessageSquare, 
   Wand2, 
@@ -9,173 +9,157 @@ import {
   Volume2,
   VolumeX,
   Maximize2,
-  Check
+  Check,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
+import { useAuth } from '@/hooks/useAuth';
 
 interface Message {
   id: string;
   role: 'assistant' | 'user';
   content: string;
+  isLoading?: boolean;
+  isError?: boolean;
 }
 
 interface AIAssistantProps {
   onApplyContent: (content: string) => void;
+  documentContext?: string;
 }
 
-const AIAssistant: React.FC<AIAssistantProps> = ({ onApplyContent }) => {
+const AIAssistant: React.FC<AIAssistantProps> = ({ onApplyContent, documentContext }) => {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'chat' | 'wizard'>('chat');
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       role: 'assistant',
-      content: 'outline specific concerns, propose suggestions, or provide supporting details.]',
-    },
-    {
-      id: '2',
-      role: 'assistant',
-      content: 'I kindly request your guidance/approval/action on this matter at your earliest convenience. Please let me know if any additional information is required.',
-    },
-    {
-      id: '3',
-      role: 'assistant',
-      content: 'Thank you for your attention to this request.',
-    },
-    {
-      id: '4',
-      role: 'assistant',
-      content: 'Yours sincerely,\n[Your Full Name]\n[Your Position/Role, if applicable]\n[Contact Information, if required]',
+      content: "Hello! I'm your PaperMorph AI assistant. I can help you write letters, emails, reports, and more. Just tell me what you need!",
     },
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isMuted, setIsMuted] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const handleSend = () => {
-    if (!inputValue.trim()) return;
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSend = async () => {
+    if (!inputValue.trim() || isLoading) return;
     
-    const newMessage: Message = {
+    if (!user) {
+      toast.error('Please sign in to use AI features');
+      return;
+    }
+
+    const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
       content: inputValue,
     };
     
-    setMessages(prev => [...prev, newMessage]);
-    const userQuery = inputValue.toLowerCase();
+    const loadingMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      role: 'assistant',
+      content: '',
+      isLoading: true,
+    };
+
+    setMessages(prev => [...prev, userMessage, loadingMessage]);
+    const userQuery = inputValue;
     setInputValue('');
-    
-    // Generate dummy response based on user query
-    setTimeout(() => {
-      let response = '';
-      
-      if (userQuery.includes('letter') || userQuery.includes('write a letter')) {
-        response = `Dear Sir/Madam,
+    setIsLoading(true);
 
-I hope this letter finds you well. I am writing to you today to discuss an important matter that requires your attention.
+    try {
+      const { data, error } = await supabase.functions.invoke('ai-assistant', {
+        body: {
+          action: 'chat',
+          content: userQuery,
+          context: documentContext || undefined,
+        },
+      });
 
-[Your main content would go here - you can customize this section based on your specific needs]
-
-Thank you for your time and consideration. I look forward to your response and hope we can resolve this matter amicably.
-
-Yours sincerely,
-[Your Name]
-[Your Position]
-[Your Contact Information]`;
-      } else if (userQuery.includes('email') || userQuery.includes('mail')) {
-        response = `Subject: Important Communication - Action Required
-
-Dear Team,
-
-I hope this email finds you well. I'm reaching out regarding [specific topic] that needs our immediate attention.
-
-Key Points:
-• First important point to consider
-• Second key item for discussion  
-• Third critical action item
-
-Next Steps:
-1. Review the attached documents
-2. Provide feedback by [date]
-3. Schedule follow-up meeting
-
-Please let me know if you have any questions or concerns. I'm available to discuss this further at your convenience.
-
-Best regards,
-[Your Name]
-[Your Title]
-[Your Contact Information]`;
-      } else if (userQuery.includes('report') || userQuery.includes('summary')) {
-        response = `Executive Summary
-
-This report provides a comprehensive analysis of [topic] for the period [timeframe]. The findings indicate significant opportunities for improvement and growth.
-
-Key Findings:
-• Performance metrics show [percentage]% improvement
-• Customer satisfaction increased by [percentage]%
-• Revenue growth exceeded projections by [percentage]%
-
-Recommendations:
-1. Implement strategic initiatives outlined in Section 2
-2. Allocate additional resources to high-impact areas
-3. Establish regular monitoring and reporting mechanisms
-
-Conclusion:
-The data suggests that [conclusion]. With proper implementation of the recommended actions, we expect to see continued positive results.
-
-[Your Name]
-[Your Position]
-[Date]`;
-      } else if (userQuery.includes('story') || userQuery.includes('creative')) {
-        response = `The morning sun cast long shadows across the quiet street as Sarah made her way to the old bookstore. She had always been drawn to places where stories seemed to linger in the air, where every shelf held countless adventures waiting to be discovered.
-
-The little bell above the door chimed softly as she entered, and the familiar scent of aged paper and possibility filled her senses. Behind the counter, Mr. Henderson looked up from his reading, his weathered face breaking into a warm smile.
-
-"Good morning, Sarah," he said. "Here for another adventure, are we?"
-
-She nodded, her eyes already scanning the shelves. "I'm looking for something different today. Something... magical."
-
-Mr. Henderson's eyes twinkled. "I have just the thing," he said, reaching beneath the counter. "This one's special. It chooses its readers, you know."
-
-What happened next would change Sarah's life forever...`;
-      } else {
-        response = `I understand your request for "${inputValue}". Here's a comprehensive response to help you:
-
-Based on your inquiry, I can provide you with the following information and guidance:
-
-Main Points:
-• This is a well-structured response to your question
-• I've included relevant details and examples
-• The content is formatted for easy reading and understanding
-
-Additional Information:
-You may want to consider the following factors when implementing this solution:
-- Quality and accuracy of information
-- Timeliness of your response
-- Appropriate formatting and presentation
-
-Next Steps:
-1. Review the provided information
-2. Customize it to your specific needs
-3. Apply it in your context
-
-This should give you a solid foundation to work with. Feel free to ask if you need any clarification or additional details!`;
+      if (error) {
+        throw new Error(error.message || 'Failed to get AI response');
       }
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      // Replace loading message with actual response
+      setMessages(prev => prev.map(msg => 
+        msg.isLoading 
+          ? { ...msg, content: data.result, isLoading: false }
+          : msg
+      ));
+
+    } catch (error) {
+      console.error('AI chat error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Something went wrong';
       
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: response,
-      }]);
-    }, 1000);
+      // Replace loading message with error
+      setMessages(prev => prev.map(msg => 
+        msg.isLoading 
+          ? { ...msg, content: errorMessage, isLoading: false, isError: true }
+          : msg
+      ));
+      
+      toast.error(errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleClear = () => {
-    setMessages([]);
+    setMessages([
+      {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: "Chat cleared. How can I help you?",
+      },
+    ]);
   };
 
   const handleApply = () => {
-    const lastAssistantMessage = messages.filter(m => m.role === 'assistant').pop();
+    const lastAssistantMessage = messages.filter(m => m.role === 'assistant' && !m.isLoading && !m.isError).pop();
     if (lastAssistantMessage) {
       onApplyContent(lastAssistantMessage.content);
+      toast.success('Content applied to document');
     }
+  };
+
+  const handleQuickAction = async (action: string) => {
+    if (!user) {
+      toast.error('Please sign in to use AI features');
+      return;
+    }
+
+    let prompt = '';
+    switch (action) {
+      case 'letter':
+        prompt = 'Write a professional business letter template with proper formatting';
+        break;
+      case 'email':
+        prompt = 'Write a professional email template for business communication';
+        break;
+      case 'report':
+        prompt = 'Create a report template with sections for executive summary, findings, and recommendations';
+        break;
+      case 'tips':
+        prompt = 'Give me 5 quick tips for better document writing';
+        break;
+      default:
+        return;
+    }
+
+    setInputValue(prompt);
   };
 
   return (
@@ -219,19 +203,59 @@ This should give you a solid foundation to work with. Feel free to ask if you ne
         </button>
       </div>
 
+      {/* Quick Actions */}
+      {activeTab === 'wizard' && (
+        <div className="ai-quick-actions p-3 border-b border-border">
+          <p className="text-xs text-muted-foreground mb-2">Quick Templates</p>
+          <div className="flex flex-wrap gap-2">
+            <button 
+              className="px-2 py-1 text-xs bg-primary/10 text-primary rounded hover:bg-primary/20 transition-colors"
+              onClick={() => handleQuickAction('letter')}
+            >
+              📝 Letter
+            </button>
+            <button 
+              className="px-2 py-1 text-xs bg-primary/10 text-primary rounded hover:bg-primary/20 transition-colors"
+              onClick={() => handleQuickAction('email')}
+            >
+              ✉️ Email
+            </button>
+            <button 
+              className="px-2 py-1 text-xs bg-primary/10 text-primary rounded hover:bg-primary/20 transition-colors"
+              onClick={() => handleQuickAction('report')}
+            >
+              📊 Report
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Messages */}
       <div className="ai-messages">
         {messages.map((message) => (
-          <div key={message.id} className={`ai-message ${message.role}`}>
-            <p>{message.content}</p>
+          <div key={message.id} className={`ai-message ${message.role} ${message.isError ? 'error' : ''}`}>
+            {message.isLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 size={14} className="animate-spin" />
+                <span>Thinking...</span>
+              </div>
+            ) : message.isError ? (
+              <div className="flex items-start gap-2 text-destructive">
+                <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+                <span>{message.content}</span>
+              </div>
+            ) : (
+              <p className="whitespace-pre-wrap">{message.content}</p>
+            )}
           </div>
         ))}
+        <div ref={messagesEndRef} />
         
         {/* Apply Button */}
-        {messages.length > 0 && (
+        {messages.length > 0 && messages.some(m => m.role === 'assistant' && !m.isLoading && !m.isError) && (
           <button className="ai-apply-btn" onClick={handleApply}>
             <Check size={14} />
-            <span>Apply</span>
+            <span>Apply to Document</span>
           </button>
         )}
       </div>
@@ -242,7 +266,7 @@ This should give you a solid foundation to work with. Feel free to ask if you ne
           <Eraser size={14} />
           <span>Clear</span>
         </button>
-        <button className="ai-action-btn">
+        <button className="ai-action-btn" onClick={() => handleQuickAction('tips')}>
           <Lightbulb size={14} />
           <span>Tips</span>
         </button>
@@ -250,19 +274,24 @@ This should give you a solid foundation to work with. Feel free to ask if you ne
 
       {/* Input */}
       <div className="ai-input-container">
-        <button className="ai-input-add">
+        <button className="ai-input-add" onClick={() => setActiveTab('wizard')}>
           <Plus size={16} />
         </button>
         <input
           type="text"
-          placeholder="Type a message..."
+          placeholder={isLoading ? "Thinking..." : "Ask me anything..."}
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
           className="ai-input"
+          disabled={isLoading}
         />
-        <button className="ai-send-btn" onClick={handleSend}>
-          <Send size={16} />
+        <button 
+          className="ai-send-btn" 
+          onClick={handleSend}
+          disabled={isLoading || !inputValue.trim()}
+        >
+          {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
         </button>
       </div>
     </aside>

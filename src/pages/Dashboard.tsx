@@ -13,7 +13,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
 import {
-  Plus, Search, FileText, Clock, Star, MoreVertical, Trash2, Edit, 
+  Plus, Search, FileText, Clock, Star, MoreVertical, Trash2, Edit, Pencil,
   Copy, FolderOpen, Grid3X3, List, SortAsc, Filter, Loader2,
   Settings, LogOut, User, ChevronDown, Sparkles, LayoutTemplate,
   TrendingUp, Zap, Bell
@@ -54,6 +54,9 @@ export default function Dashboard() {
   const [isCreating, setIsCreating] = useState(false);
   const [newDocTitle, setNewDocTitle] = useState('');
   const [showNewDocDialog, setShowNewDocDialog] = useState(false);
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [renameDocId, setRenameDocId] = useState<string | null>(null);
+  const [renameTitle, setRenameTitle] = useState('');
 
   useEffect(() => {
     if (user) {
@@ -185,6 +188,36 @@ export default function Dashboard() {
       console.error('Error duplicating document:', error);
       toast.error('Failed to duplicate document');
     }
+  };
+
+  const renameDocument = async () => {
+    if (!renameDocId || !renameTitle.trim()) return;
+    
+    try {
+      const { error } = await supabase
+        .from('documents')
+        .update({ title: renameTitle.trim(), updated_at: new Date().toISOString() })
+        .eq('id', renameDocId);
+
+      if (error) throw error;
+      
+      setDocuments(docs => 
+        docs.map(d => d.id === renameDocId ? { ...d, title: renameTitle.trim() } : d)
+      );
+      toast.success('Document renamed');
+      setShowRenameDialog(false);
+      setRenameDocId(null);
+      setRenameTitle('');
+    } catch (error) {
+      console.error('Error renaming document:', error);
+      toast.error('Failed to rename document');
+    }
+  };
+
+  const openRenameDialog = (doc: Document) => {
+    setRenameDocId(doc.id);
+    setRenameTitle(doc.title);
+    setShowRenameDialog(true);
   };
 
   const handleSignOut = async () => {
@@ -370,6 +403,35 @@ export default function Dashboard() {
               </DialogContent>
             </Dialog>
 
+            {/* Rename Document Dialog */}
+            <Dialog open={showRenameDialog} onOpenChange={setShowRenameDialog}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Rename Document</DialogTitle>
+                  <DialogDescription>
+                    Enter a new name for your document
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="py-4">
+                  <Input
+                    placeholder="Document title"
+                    value={renameTitle}
+                    onChange={(e) => setRenameTitle(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && renameDocument()}
+                    autoFocus
+                  />
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setShowRenameDialog(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={renameDocument} disabled={!renameTitle.trim()}>
+                    Rename
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
             <Button variant="outline" onClick={() => navigate('/templates')} className="gap-2">
               <LayoutTemplate className="h-4 w-4" />
               Templates
@@ -464,6 +526,10 @@ export default function Dashboard() {
                         <DropdownMenuItem onClick={(e) => { e.stopPropagation(); toggleFavorite(doc.id, doc.is_favorite); }}>
                           <Star className={`h-4 w-4 mr-2 ${doc.is_favorite ? 'fill-yellow-500 text-yellow-500' : ''}`} />
                           {doc.is_favorite ? 'Unfavorite' : 'Favorite'}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openRenameDialog(doc); }}>
+                          <Pencil className="h-4 w-4 mr-2" />
+                          Rename
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={(e) => { e.stopPropagation(); duplicateDocument(doc); }}>
                           <Copy className="h-4 w-4 mr-2" />

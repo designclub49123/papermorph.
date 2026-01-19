@@ -22,12 +22,12 @@ serve(async (req) => {
   }
 
   try {
-    const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY');
+    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     
-    if (!OPENROUTER_API_KEY) {
-      console.error('OPENROUTER_API_KEY not configured');
+    if (!LOVABLE_API_KEY) {
+      console.error('LOVABLE_API_KEY not configured');
       return new Response(
-        JSON.stringify({ error: 'AI service not configured' }),
+        JSON.stringify({ error: 'AI service not configured. Please contact support.' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -46,7 +46,7 @@ serve(async (req) => {
     if (authError || !user) {
       console.log('Auth error or no user:', authError?.message);
       return new Response(
-        JSON.stringify({ error: 'Unauthorized' }),
+        JSON.stringify({ error: 'Please sign in to use AI features' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -67,31 +67,40 @@ serve(async (req) => {
 
     switch (action) {
       case 'chat':
-        systemPrompt = `You are PaperMorph AI, an intelligent writing assistant. You help users with their documents, answer questions about writing, and provide helpful suggestions. Be concise, helpful, and professional.${context ? ` Context about the document: ${context}` : ''}`;
+        systemPrompt = `You are PaperMorph AI, an intelligent writing assistant for a document editor. You help users with their documents, answer questions about writing, and provide helpful suggestions. 
+
+Your capabilities include:
+- Writing letters, emails, reports, and various document types
+- Providing formatting advice and structure suggestions
+- Answering questions about grammar, style, and clarity
+- Generating creative content when asked
+
+Be concise, helpful, and professional. When asked to write documents, provide complete, well-formatted content that users can directly use.
+${context ? `\nContext about the document the user is working on: ${context}` : ''}`;
         break;
       
       case 'rewrite':
-        systemPrompt = `You are a professional editor. Rewrite the following text to improve clarity, flow, and engagement while maintaining the original meaning.${tone ? ` Use a ${tone} tone.` : ''}${style ? ` Write in a ${style} style.` : ''} Only return the rewritten text, no explanations.`;
+        systemPrompt = `You are a professional editor. Rewrite the following text to improve clarity, flow, and engagement while maintaining the original meaning.${tone ? ` Use a ${tone} tone.` : ''}${style ? ` Write in a ${style} style.` : ''} Only return the rewritten text, no explanations or preamble.`;
         break;
       
       case 'summarize':
-        systemPrompt = 'You are an expert summarizer. Create a clear, concise summary of the following text, capturing all key points. Only return the summary, no explanations.';
+        systemPrompt = 'You are an expert summarizer. Create a clear, concise summary of the following text, capturing all key points. Only return the summary, no explanations or preamble.';
         break;
       
       case 'grammar':
-        systemPrompt = 'You are a grammar expert. Check and correct any grammar, spelling, punctuation, or style issues in the following text. Return the corrected text only, no explanations.';
+        systemPrompt = 'You are a grammar expert. Check and correct any grammar, spelling, punctuation, or style issues in the following text. Return the corrected text only, no explanations or preamble.';
         break;
       
       case 'translate':
-        systemPrompt = `You are a professional translator. Translate the following text to ${targetLanguage || 'English'}. Maintain the original tone and meaning. Only return the translated text.`;
+        systemPrompt = `You are a professional translator. Translate the following text to ${targetLanguage || 'English'}. Maintain the original tone and meaning. Only return the translated text, no explanations.`;
         break;
       
       case 'expand':
-        systemPrompt = 'You are a creative writer. Expand and elaborate on the following text, adding more detail, examples, and depth while maintaining the original intent. Only return the expanded text.';
+        systemPrompt = 'You are a creative writer. Expand and elaborate on the following text, adding more detail, examples, and depth while maintaining the original intent. Only return the expanded text, no explanations or preamble.';
         break;
       
       case 'complete':
-        systemPrompt = 'You are an AI writing assistant. Complete the following text in a natural, coherent way that matches the style and context. Only return the completed portion, not the original text.';
+        systemPrompt = 'You are an AI writing assistant. Complete the following text in a natural, coherent way that matches the style and context. Only return the completed portion that should be appended, not the original text.';
         break;
       
       default:
@@ -103,17 +112,15 @@ serve(async (req) => {
 
     console.log(`Processing ${action} request for user ${user.id}`);
 
-    // Call OpenRouter API
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    // Call Lovable AI Gateway
+    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://papermorph.app',
-        'X-Title': 'PaperMorph AI Assistant',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.0-flash-001',
+        model: 'google/gemini-3-flash-preview',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
@@ -125,9 +132,24 @@ serve(async (req) => {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('OpenRouter API error:', errorText);
+      console.error('Lovable AI Gateway error:', response.status, errorText);
+      
+      if (response.status === 429) {
+        return new Response(
+          JSON.stringify({ error: 'AI rate limit exceeded. Please try again in a moment.' }),
+          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      
+      if (response.status === 402) {
+        return new Response(
+          JSON.stringify({ error: 'AI usage limit reached. Please upgrade your plan.' }),
+          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      
       return new Response(
-        JSON.stringify({ error: 'AI service error', details: errorText }),
+        JSON.stringify({ error: 'AI service temporarily unavailable. Please try again.' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -137,12 +159,16 @@ serve(async (req) => {
     const tokensUsed = data.usage?.total_tokens || 0;
 
     // Log AI usage
-    await supabaseClient.from('ai_usage').insert({
-      user_id: user.id,
-      action_type: action,
-      tokens_used: tokensUsed,
-      model: 'google/gemini-2.0-flash-001',
-    });
+    try {
+      await supabaseClient.from('ai_usage').insert({
+        user_id: user.id,
+        action_type: action,
+        tokens_used: tokensUsed,
+        model: 'google/gemini-3-flash-preview',
+      });
+    } catch (logError) {
+      console.warn('Failed to log AI usage:', logError);
+    }
 
     console.log(`Successfully processed ${action} request, tokens used: ${tokensUsed}`);
 
@@ -159,7 +185,7 @@ serve(async (req) => {
     console.error('Edge function error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
-      JSON.stringify({ error: 'Internal server error', details: errorMessage }),
+      JSON.stringify({ error: 'Something went wrong. Please try again.', details: errorMessage }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
