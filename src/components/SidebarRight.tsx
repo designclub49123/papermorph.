@@ -347,6 +347,9 @@ export function SidebarRight() {
       return;
     }
 
+    // Get selected text from current document or use placeholder
+    const selectedText = currentDocument?.content || 'Please help me with my document.';
+
     try {
       setActionProgress(prev => ({ ...prev, [action]: 0 }));
       
@@ -362,30 +365,31 @@ export function SidebarRight() {
         });
       }, 100);
 
+      let result = '';
       switch (action) {
         case 'generate':
           await generateSection();
           toast.success('Content generated successfully!');
           break;
         case 'formal':
-          await rewriteFormal();
-          toast.success('Text made more formal!');
+          result = await rewriteFormal(selectedText);
+          if (result) toast.success('Text made more formal!');
           break;
         case 'grammar':
-          await fixGrammar();
-          toast.success('Grammar checked and corrected!');
+          result = await fixGrammar(selectedText);
+          if (result) toast.success('Grammar checked and corrected!');
           break;
         case 'condense':
-          await condense();
-          toast.success('Text condensed successfully!');
+          result = await condense(selectedText);
+          if (result) toast.success('Text condensed successfully!');
           break;
         case 'expand':
-          await expand();
-          toast.success('Text expanded with more details!');
+          result = await expand(selectedText);
+          if (result) toast.success('Text expanded with more details!');
           break;
         case 'summarize':
-          await summarize();
-          toast.success('Document summarized!');
+          result = await summarize(selectedText);
+          if (result) toast.success('Document summarized!');
           break;
         default:
           break;

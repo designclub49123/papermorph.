@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { buildEnhancedSystemPrompt, postProcessAIResponse } from '@/config/papermorph-ai';
 import { htmlToReadableText, isHTMLContent, sanitizeHTML } from '@/utils/htmlFormatter';
+import { supabase } from '@/integrations/supabase/client';
 
 export interface Message {
   id: string;
@@ -41,11 +42,11 @@ interface AISidebarState {
   
   // AI Actions
   generateSection: () => Promise<void>;
-  rewriteFormal: () => Promise<void>;
-  fixGrammar: () => Promise<void>;
-  condense: () => Promise<void>;
-  expand: () => Promise<void>;
-  summarize: () => Promise<void>;
+  rewriteFormal: (text: string) => Promise<string>;
+  fixGrammar: (text: string) => Promise<string>;
+  condense: (text: string) => Promise<string>;
+  expand: (text: string) => Promise<string>;
+  summarize: (text: string) => Promise<string>;
   
   // Wizard Actions
   startWizard: (type: WizardType) => void;
@@ -94,6 +95,41 @@ const WIZARD_STEPS: Record<string, WizardStep[]> = {
   ],
 };
 
+// Helper function to call AI edge function
+async function callAIEdgeFunction(action: string, content: string, options?: {
+  context?: string;
+  targetLanguage?: string;
+  tone?: string;
+  style?: string;
+}): Promise<{ result: string; error?: string }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('ai-assistant', {
+      body: {
+        action,
+        content,
+        context: options?.context,
+        targetLanguage: options?.targetLanguage,
+        tone: options?.tone,
+        style: options?.style,
+      },
+    });
+
+    if (error) {
+      console.error('AI edge function error:', error);
+      return { result: '', error: error.message || 'Failed to call AI service' };
+    }
+
+    if (data?.error) {
+      return { result: '', error: data.error };
+    }
+
+    return { result: data?.result || '' };
+  } catch (err) {
+    console.error('AI call error:', err);
+    return { result: '', error: err instanceof Error ? err.message : 'Unknown error' };
+  }
+}
+
 export const useAISidebar = create<AISidebarState>((set, get) => ({
   isOpen: true,
   mode: 'chat',
@@ -102,10 +138,13 @@ export const useAISidebar = create<AISidebarState>((set, get) => ({
   wizardType: null,
   wizardStep: 0,
   wizardData: {},
+  pendingIntent: null,
 
   toggle: () => set((state) => ({ isOpen: !state.isOpen })),
 
   setMode: (mode) => set({ mode }),
+
+  setPendingIntent: (intent) => set({ pendingIntent: intent }),
 
   sendMessage: async (content, documentContext) => {
     const userMessage: Message = {
@@ -121,7 +160,7 @@ export const useAISidebar = create<AISidebarState>((set, get) => ({
       isGenerating: true,
     }));
 
-    // Create assistant message with empty content initially
+    // Create assistant message with loading state
     const assistantMessageId = (Date.now() + 1).toString();
     const assistantMessage: Message = {
       id: assistantMessageId,
@@ -130,220 +169,38 @@ export const useAISidebar = create<AISidebarState>((set, get) => ({
       timestamp: new Date(),
     };
 
-    // Add empty assistant message to start the streaming effect
+    // Add empty assistant message to start
     set((state) => ({
       messages: [...state.messages, assistantMessage],
     }));
 
-    // Disable pending intent handling
-    // const pending = get().pendingIntent;
-    // if (pending && pending.type === 'email') {
-    //   // Clear pending intent immediately (we'll fulfill it now)
-    //   set({ pendingIntent: null });
-
-    //   // Proceed to call API with an instruction to return ONLY email content
-    //   try {
-    //     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    //         method: 'POST',
-    //         headers: {
-    //           'Authorization': 'Bearer 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',
-    //           'Content-Type': 'application/json',
-    //           'HTTP-Referer': 'https://papermorph.com',
-    //           'X-Title': 'Papermorph',
-    //         },
-    //         body: JSON.stringify({
-    //           model: 'tngtech/tng-r1t-chimera:free',
-    //           messages: [
-    //             { role: 'system', content: 'You are Papermorph assistant. When asked to compose an email, ask clarifying questions. When provided with email details, produce ONLY the final email text (Subject line + body) with no extra commentary.' },
-    //             // include previous messages for context
-    //             ...get().messages.map(msg => ({ role: msg.role, content: msg.content })),
-    //             { role: 'user', content },
-    //           ],
-    //           stream: true,
-    //         }),
-    //     });
-
-    //     if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
-
-    //     const reader = response.body?.getReader();
-    //     const decoder = new TextDecoder();
-    //     let done = false;
-    //     let fullResponse = '';
-
-    //     if (!reader) throw new Error('Failed to read response stream');
-
-    //     while (!done) {
-    //       const { value, done: doneReading } = await reader.read();
-    //       done = doneReading;
-    //       if (value) {
-    //         const chunk = decoder.decode(value, { stream: true });
-    //         const lines = chunk.split('\n').filter(line => line.trim() !== '');
-    //         for (const line of lines) {
-    //           if (line.startsWith('data: ')) {
-    //             const data = line.replace('data: ', '');
-    //             if (data === '[DONE]') { done = true; break; }
-    //             try {
-    //               const parsed = JSON.parse(data);
-    //               const c = parsed.choices[0]?.delta?.content || '';
-    //               if (c) {
-    //                 // Accumulate fullResponse but DO NOT update visible message until stream completes
-    //                 fullResponse += c;
-    //               }
-    //             } catch (e) {
-    //               console.error('Error parsing chunk:', e);
-    //             }
-    //           }
-    //         }
-    //       }
-    //     }
-
-    //     // When done, store the entire final email as applyContent (we instructed model to return only email)
-    //     // Convert to readable text for display but keep original for apply
-    //     const displayEmail = isHTMLContent(fullResponse) ? htmlToReadableText(fullResponse) : fullResponse;
-    //     set((state) => ({ messages: state.messages.map(m => m.id === assistantMessageId ? { ...m, content: displayEmail, applyContent: sanitizeHTML(fullResponse) } : m) }));
-    //   } catch (err) {
-    //     console.error('Error during pending email generation', err);
-    //     set((state) => ({ messages: state.messages.map(m => m.id === assistantMessageId ? { ...m, content: 'Sorry, failed to generate email.' } : m) }));
-    //   } finally {
-    //     set({ isGenerating: false });
-    //   }
-
-    //   return;
-    // }
-
     try {
-      // Build enhanced system prompt using PaperMorph AI training
-      const systemPrompt = buildEnhancedSystemPrompt(documentContext || '', content);
+      // Build enhanced context using PaperMorph AI training
+      const enhancedContext = documentContext 
+        ? buildEnhancedSystemPrompt(documentContext, content).substring(0, 500)
+        : undefined;
 
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer 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',
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://papermorph.com',
-          'X-Title': 'Papermorph',
-        },
-        body: JSON.stringify({
-          model: 'tngtech/tng-r1t-chimera:free',
-          messages: [
-            {
-              role: 'system',
-              content: systemPrompt
-            },
-            ...get().messages.map(msg => ({
-              role: msg.role,
-              content: msg.content
-            })),
-            { role: 'user', content }
-          ],
-          stream: true,
-        }),
+      const { result, error } = await callAIEdgeFunction('chat', content, {
+        context: enhancedContext,
       });
 
-      if (!response.ok) {
-        throw new Error(`API request failed with status ${response.status}`);
+      if (error) {
+        throw new Error(error);
       }
 
-      // Handle streaming response
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      let done = false;
-      let fullResponse = '';
-
-      if (!reader) {
-        throw new Error('Failed to read response stream');
-      }
-
-      while (!done) {
-        const { value, done: doneReading } = await reader.read();
-        done = doneReading;
-        
-        if (value) {
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n').filter(line => line.trim() !== '');
-          
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.replace('data: ', '');
-              if (data === '[DONE]') {
-                done = true;
-                break;
-              }
-              
-                      try {
-                        const parsed = JSON.parse(data);
-                        const content = parsed.choices[0]?.delta?.content || '';
-                        if (content) {
-                          // Accumulate full response; don't update visible content until finished
-                          fullResponse += content;
-                        }
-                      } catch (e) {
-                        console.error('Error parsing chunk:', e);
-                      }
-            }
-          }
-        }
-      }
-      // When streaming completes, extract the main document content for the Apply button
-      const extractApplyContent = (text: string) => {
-        if (!text) return text;
-
-        // Simply remove planning/thinking paragraphs and keep all the actual content
-        const cleaned = text.trim();
-        const paras = cleaned.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
-        
-        // Skip planning paragraphs at the start
-        const prefixRe = /^(okay[,\s]|let me |let me start|first\b|i will\b|i'll\b|in the body\b|the format should\b|let me begin\b|here is|here's|so here|let's)/i;
-        let startIdx = 0;
-        while (startIdx < paras.length && prefixRe.test(paras[startIdx])) {
-          startIdx++;
-        }
-
-        // Skip filler/commentary at the end
-        const suffixRe = /^(please|feel free to|let me know|additionally|also|i hope|you can|this should|does this|would you|hope this|cheers|regards)/i;
-        let endIdx = paras.length;
-        while (endIdx > startIdx && suffixRe.test(paras[endIdx - 1])) {
-          endIdx--;
-        }
-
-        // Return ALL content between start and end - no limitations!
-        const resultParas = paras.slice(startIdx, endIdx);
-        return resultParas.length ? resultParas.join('\n\n') : cleaned;
-      };
-
-      const applyContent = extractApplyContent(fullResponse);
-      // Final display content should also be sanitized (hide planning paragraphs)
-      const sanitizeFinal = (text: string) => {
-        if (!text) return text;
-        const cleaned = text.trim();
-        const paras = cleaned.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
-        const analysisRe = /^(okay[,\s]|let me |let me start|first\b|i will\b|i'll\b|in the body\b|the format should\b|let me begin\b)/i;
-        let i = 0;
-        while (i < paras.length && analysisRe.test(paras[i])) i++;
-        const resultParas = paras.slice(i);
-        return resultParas.length ? resultParas.join('\n\n') : cleaned;
-      };
-
-      const finalDisplay = sanitizeFinal(fullResponse);
+      // Process the response
+      const processedContent = postProcessAIResponse(result, 'general');
       
-      // Apply additional post-processing for better content application
-      const processedDisplay = postProcessAIResponse(finalDisplay, 'general');
-      
-      // Convert HTML to readable text for chat display, but keep HTML for apply
-      let displayContent = processedDisplay;
-      let htmlApplyContent = applyContent;
+      // Prepare display and apply content
+      let displayContent = processedContent;
+      let htmlApplyContent = processedContent;
 
-      // If the response contains HTML, show readable text in chat
-      if (isHTMLContent(processedDisplay)) {
-        displayContent = htmlToReadableText(processedDisplay);
-      }
-
-      // If apply content is HTML, sanitize it for document insertion
-      if (isHTMLContent(htmlApplyContent)) {
-        htmlApplyContent = sanitizeHTML(htmlApplyContent);
+      if (isHTMLContent(processedContent)) {
+        displayContent = htmlToReadableText(processedContent);
+        htmlApplyContent = sanitizeHTML(processedContent);
       }
       
-      // Update the assistant message once, after the stream is fully received
+      // Update the assistant message
       set((state) => ({
         messages: state.messages.map(msg =>
           msg.id === assistantMessageId
@@ -352,32 +209,29 @@ export const useAISidebar = create<AISidebarState>((set, get) => ({
         ),
       }));
     } catch (error) {
-      console.error('Error calling OpenRouter API:', error);
+      console.error('Error calling AI:', error);
       
       // Better error handling with specific error types
       let errorMessage = 'Sorry, I encountered an error while processing your request.';
+      const errMsg = error instanceof Error ? error.message : '';
       
-      if (error instanceof TypeError) {
-        errorMessage = 'Network error: Please check your internet connection and try again.';
-      } else if (error.message?.includes('401') || error.message?.includes('unauthorized')) {
-        errorMessage = 'API authentication error: Please check your API key and try again.';
-      } else if (error.message?.includes('429')) {
-        errorMessage = 'Rate limit exceeded: Please wait a moment and try again.';
-      } else if (error.message?.includes('500')) {
-        errorMessage = 'Service temporarily unavailable: Please try again in a few moments.';
-      } else if (error.message?.includes('timeout')) {
-        errorMessage = 'Request timeout: Please try again.';
+      if (errMsg.includes('sign in') || errMsg.includes('401') || errMsg.includes('unauthorized')) {
+        errorMessage = 'Please sign in to use AI features.';
+      } else if (errMsg.includes('429') || errMsg.includes('rate limit')) {
+        errorMessage = 'Rate limit exceeded. Please wait a moment and try again.';
+      } else if (errMsg.includes('402') || errMsg.includes('payment')) {
+        errorMessage = 'AI usage limit reached. Please upgrade your plan.';
+      } else if (errMsg.includes('500') || errMsg.includes('unavailable')) {
+        errorMessage = 'AI service temporarily unavailable. Please try again.';
+      } else if (error instanceof TypeError) {
+        errorMessage = 'Network error. Please check your connection and try again.';
       }
       
       // Update with specific error message
       set((state) => ({
         messages: state.messages.map(msg => 
           msg.id === assistantMessageId 
-            ? { 
-                ...msg, 
-                content: errorMessage,
-                isError: true
-              } 
+            ? { ...msg, content: errorMessage, isError: true } 
             : msg
         ),
       }));
@@ -390,39 +244,63 @@ export const useAISidebar = create<AISidebarState>((set, get) => ({
 
   generateSection: async () => {
     set({ isGenerating: true });
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    // Placeholder - would generate content and insert into document
+    await new Promise((resolve) => setTimeout(resolve, 500));
     set({ isGenerating: false });
   },
 
-  rewriteFormal: async () => {
+  rewriteFormal: async (text: string) => {
     set({ isGenerating: true });
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    set({ isGenerating: false });
+    try {
+      const { result, error } = await callAIEdgeFunction('rewrite', text, { tone: 'formal' });
+      if (error) throw new Error(error);
+      return result;
+    } finally {
+      set({ isGenerating: false });
+    }
   },
 
-  fixGrammar: async () => {
+  fixGrammar: async (text: string) => {
     set({ isGenerating: true });
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    set({ isGenerating: false });
+    try {
+      const { result, error } = await callAIEdgeFunction('grammar', text);
+      if (error) throw new Error(error);
+      return result;
+    } finally {
+      set({ isGenerating: false });
+    }
   },
 
-  condense: async () => {
+  condense: async (text: string) => {
     set({ isGenerating: true });
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    set({ isGenerating: false });
+    try {
+      const { result, error } = await callAIEdgeFunction('summarize', text);
+      if (error) throw new Error(error);
+      return result;
+    } finally {
+      set({ isGenerating: false });
+    }
   },
 
-  expand: async () => {
+  expand: async (text: string) => {
     set({ isGenerating: true });
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    set({ isGenerating: false });
+    try {
+      const { result, error } = await callAIEdgeFunction('expand', text);
+      if (error) throw new Error(error);
+      return result;
+    } finally {
+      set({ isGenerating: false });
+    }
   },
 
-  summarize: async () => {
+  summarize: async (text: string) => {
     set({ isGenerating: true });
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    set({ isGenerating: false });
+    try {
+      const { result, error } = await callAIEdgeFunction('summarize', text);
+      if (error) throw new Error(error);
+      return result;
+    } finally {
+      set({ isGenerating: false });
+    }
   },
 
   startWizard: (type) => set({ wizardType: type, wizardStep: 0, wizardData: {}, mode: 'wizard' }),
@@ -445,15 +323,76 @@ export const useAISidebar = create<AISidebarState>((set, get) => ({
   },
 
   finishWizard: async () => {
+    const { wizardType, wizardData } = get();
+    if (!wizardType) return;
+
     set({ isGenerating: true });
-    // Placeholder - would send wizard data to AI API
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-    set({ isGenerating: false, wizardType: null, wizardStep: 0, wizardData: {}, mode: 'chat' });
+
+    try {
+      // Build prompt based on wizard type
+      let prompt = '';
+      switch (wizardType) {
+        case 'letter':
+          prompt = `Write a ${wizardData.tone || 'formal'} letter to ${wizardData.recipient}${wizardData.recipientTitle ? ` (${wizardData.recipientTitle})` : ''} for the purpose of ${wizardData.purpose}.${wizardData.keyPoints ? ` Key points to include: ${wizardData.keyPoints}` : ''}`;
+          break;
+        case 'report':
+          prompt = `Write a ${wizardData.reportType} titled "${wizardData.title}"${wizardData.period ? ` for the period ${wizardData.period}` : ''}.${wizardData.keyFindings ? ` Key findings: ${wizardData.keyFindings}` : ''}${wizardData.recommendations ? ` Recommendations: ${wizardData.recommendations}` : ''}`;
+          break;
+        case 'proposal':
+          prompt = `Write a project proposal for "${wizardData.projectName}"${wizardData.client ? ` for ${wizardData.client}` : ''}. Objective: ${wizardData.objective}${wizardData.budget ? `. Budget: ${wizardData.budget}` : ''}${wizardData.timeline ? `. Timeline: ${wizardData.timeline}` : ''}${wizardData.deliverables ? `. Deliverables: ${wizardData.deliverables}` : ''}`;
+          break;
+        case 'essay':
+          prompt = `Write a ${wizardData.essayType} essay on "${wizardData.topic}"${wizardData.thesis ? `. Thesis: ${wizardData.thesis}` : ''}${wizardData.wordCount ? `. Target word count: ${wizardData.wordCount}` : ''}${wizardData.sources ? `. Sources to reference: ${wizardData.sources}` : ''}`;
+          break;
+      }
+
+      const { result, error } = await callAIEdgeFunction('chat', prompt);
+      
+      if (error) {
+        throw new Error(error);
+      }
+
+      // Add the generated content as a message
+      const assistantMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: result,
+        timestamp: new Date(),
+        applyContent: result,
+      };
+
+      set((state) => ({
+        messages: [...state.messages, assistantMessage],
+        wizardType: null,
+        wizardStep: 0,
+        wizardData: {},
+        mode: 'chat',
+      }));
+    } catch (error) {
+      console.error('Error in wizard:', error);
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: 'Sorry, I encountered an error generating your document. Please try again.',
+        timestamp: new Date(),
+        isError: true,
+      };
+      set((state) => ({
+        messages: [...state.messages, errorMessage],
+      }));
+    } finally {
+      set({ isGenerating: false });
+    }
   },
 
-  cancelWizard: () => set({ wizardType: null, wizardStep: 0, wizardData: {}, mode: 'chat' }),
-  pendingIntent: null,
-  setPendingIntent: (intent) => set({ pendingIntent: intent }),
+  cancelWizard: () =>
+    set({
+      wizardType: null,
+      wizardStep: 0,
+      wizardData: {},
+      mode: 'chat',
+    }),
 }));
 
+// Export wizard steps for use in components
 export { WIZARD_STEPS };
