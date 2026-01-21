@@ -5,9 +5,11 @@ import { SidebarLeft } from './SidebarLeft';
 import { SidebarRight } from './SidebarRight';
 import MainToolbar from './editor/Toolbar';
 import StatusBar from './StatusBar';
+import MobileAIChat from './MobileAIChat';
 import { useEditorStore } from '@/state/useEditorStore';
 import { useUserStore } from '@/state/useUserStore';
 import { useDocStore } from '@/state/useDocStore';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -19,6 +21,7 @@ const DocumentEditor: React.FC = () => {
   const { setEditor } = useEditorStore();
   const { theme } = useUserStore();
   const { currentDocument } = useDocStore();
+  const isMobile = useIsMobile();
   const [documentName, setDocumentName] = useState('Untitled Document');
   const [isSaved, setIsSaved] = useState(true);
   const [wordCount, setWordCount] = useState(0);
@@ -814,6 +817,11 @@ const DocumentEditor: React.FC = () => {
     };
   }, []);
 
+  // On mobile, show only the AI Chat interface
+  if (isMobile) {
+    return <MobileAIChat />;
+  }
+
   return (
     <div className="flex flex-col h-screen bg-background overflow-hidden">
       {/* Top Toolbar */}
@@ -832,7 +840,7 @@ const DocumentEditor: React.FC = () => {
         <div className="flex-1 flex flex-col min-w-0">
           {/* Ribbon Toolbar - Between sidebars */}
           <div className={`flex-shrink-0 border-b transition-colors ${
-            theme === 'dark' ? 'bg-[#000000] border-gray-800' : 'bg-[#ffffff] border-gray-200'
+            theme === 'dark' ? 'bg-background border-border' : 'bg-background border-border'
           }`}>
             <MainToolbar 
               onAction={handleToolbarAction} 
@@ -843,13 +851,12 @@ const DocumentEditor: React.FC = () => {
           </div>
 
           {/* Document Canvas */}
-          <div className={`flex-1 min-h-0 transition-colors ${
-            theme === 'dark' ? 'bg-[#000000]' : 'bg-[#ffffff]'
-          }`}>
+          <div className="flex-1 min-h-0 transition-colors bg-background">
             <div className="h-full w-full flex items-center justify-center p-4">
-              <div className={`w-full h-full max-w-6xl rounded-lg shadow-xl overflow-hidden transition-colors ${
-                theme === 'dark' ? 'bg-[#1a1a1a]' : 'bg-[#ffffff]'
-              }`}>
+              <div className={cn(
+                "w-full h-full max-w-6xl rounded-lg shadow-xl overflow-hidden transition-colors",
+                theme === 'dark' ? 'bg-card' : 'bg-card'
+              )}>
                 <DocumentEditorContainerComponent
                   ref={editorRef}
                   id="documentEditor"
